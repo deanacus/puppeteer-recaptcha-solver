@@ -1,5 +1,8 @@
 const axios = require('axios');
 const https = require('https');
+const Logger = require('./logger');
+
+const logger = new Logger({ logLevel: 'critical' });
 
 function rdn(min, max) {
   min = Math.ceil(min);
@@ -10,17 +13,28 @@ function rdn(min, max) {
 async function dumpFrameTree(frame, indent) {
   const name = await frame.title();
   const url = frame.url();
-  console.log(indent + `${name}: ${url}`);
+  logger.info(indent + `${name}: ${url}`);
   for (const child of frame.childFrames()) {
     await dumpFrameTree(child, indent + '  ');
   }
 }
 
+const TWO_DAYS_IN_MILLISECONDS = 172800000;
+
+const twoDaysAgo = () => {
+  const date = new Date(Date.now() - TWO_DAYS_IN_MILLISECONDS);
+  const y = date.getFullYear();
+  const m = date.getMonth() + 1;
+  const d = date.getDate();
+
+  return `${y}${m}${d}`;
+};
+
 async function solve(page) {
   try {
     // Wait until we have the frame we want
     while (true) {
-      console.log('looking for a recaptcha');
+      logger.info('looking for a recaptcha');
       const iframe = await page.waitForFunction(() => {
         const found = document.querySelector('iframe[src*="api2/anchor"]');
         // return !!iframe.contentWindow.document.querySelector('#recaptcha-anchor');
@@ -28,59 +42,54 @@ async function solve(page) {
       });
 
       if (iframe) {
-        console.log('found recaptcha');
+        logger.info('found recaptcha');
         break;
       }
-      console.log('Nothing found');
+      logger.error('Nothing found');
       page.waitForTimeout(250);
       continue;
     }
 
-    console.log('Getting frames.');
+    logger.info('Getting frames.');
     let frames = await page.frames();
 
-    console.log('Finding recaptcha');
+    logger.info('Finding recaptcha');
     const recaptchaFrame = frames.find((frame) =>
       frame.url().includes('api2/anchor'),
     );
 
-    console.log('Finding recaptcha checkbox');
+    logger.info('Finding recaptcha checkbox');
     const checkbox = await recaptchaFrame.$('#recaptcha-anchor');
 
-    console.log('Clicking recaptcha checkbox');
+    logger.info('Clicking recaptcha checkbox');
     await checkbox.click({ delay: rdn(30, 150) });
 
     await page.waitForTimeout(750);
 
-    console.log('Just for shits and giggles, lets check if we have succeeded');
+    logger.info('Just for shits and giggles, lets check if we have succeeded');
     const checkboxNow = await recaptchaFrame.$eval(
       '#recaptcha-anchor',
       (el) => el.outerHTML,
     );
-    console.log(checkboxNow);
+    logger.printMessage(checkboxNow, '');
 
-    // console.log('Checking recaptcha images exist');
+    // logger.info('Checking recaptcha images exist');
     // await recaptchaFrame.$eval('.rc-image-tile-wrapper img', (frame) =>
-    //   console.log(frame.innerHTML),
+    //   logger.info(frame.innerHTML),
     // );
-
-    await dumpFrameTree(recaptchaFrame, '');
-    process.exit();
-    console.log('Find the image');
+    logger.info('Find the image');
     // we can have 100 tries;
     let tries = 0;
     while (true) {
       try {
         tries++;
-        const children = recaptchaFrame.childFrames();
-
         const found = await recaptchaFrame.$('.rc-image-tile-wrapper img');
         if (!found) {
           throw new Error('');
         }
         break;
       } catch (error) {
-        console.warn(`Attempt number ${tries} failed`);
+        logger.warn(`Attempt number ${tries} failed`);
         await page.waitForTimeout(250);
         if (tries > 99) {
           break;
@@ -92,12 +101,12 @@ async function solve(page) {
       '.rc-image-tile-wrapper img',
       (img) => img.complete,
     );
-    console.log('Found the image');
+    logger.info('Found the image');
 
-    console.log('Getting a new frames array');
+    logger.info('Getting a new frames array');
     frames = await page.frames();
 
-    console.log('Finding recaptcha image iframe');
+    logger.info('Finding recaptcha image iframe');
     const imageFrame = frames.find((frame) =>
       frame.url().includes('api2/bframe'),
     );
@@ -105,22 +114,22 @@ async function solve(page) {
     const foundFrames = frames.filter((frame) =>
       frame.url().includes('api2/bframe'),
     );
-    console.log(
+    logger.info(
       `Found ${foundFrames.length} frames with url a url containing 'api2/bframe'`,
     );
 
     const imgHTML = await imageFrame.$eval('body', (el) => el.outerHTML);
-    console.log(imgHTML);
+    logger.info(imgHTML);
 
-    console.log('Finding audio button');
+    logger.info('Finding audio button');
     const audioButton = await imageFrame.$('#recaptcha-audio-button');
 
-    console.log('Clicking audio button');
+    logger.info('Clicking audio button');
     await audioButton.click({ delay: rdn(30, 150) });
 
     while (true) {
       try {
-        console.log('Finding Download link');
+        logger.info('Finding Download link');
         await page.waitForFunction(
           () => {
             const iframe = document.querySelector('iframe[src*="api2/bframe"]');
@@ -133,17 +142,17 @@ async function solve(page) {
           { timeout: 1000 },
         );
       } catch (error) {
-        console.log('download link not found');
+        logger.error('download link not found');
         return null;
       }
 
-      console.log('Getting the src of the audio src');
+      logger.info('Getting the src of the audio src');
       const audioLink = await page.evaluate(() => {
         const iframe = document.querySelector('iframe[src*="api2/bframe"]');
         return iframe.contentWindow.document.querySelector('#audio-source').src;
       });
 
-      console.log('Converting audio');
+      logger.info('Converting audio');
       const audioBytes = await page.evaluate((audioLink) => {
         return (async () => {
           const response = await window.fetch(audioLink);
@@ -152,12 +161,12 @@ async function solve(page) {
         })();
       }, audioLink);
 
-      console.log('Sending api request');
+      logger.info('Sending api request');
       const httsAgent = new https.Agent({ rejectUnauthorized: false });
       const response = await axios({
         httsAgent,
         method: 'post',
-        url: 'https://api.wit.ai/speech',
+        url: `https://api.wit.ai/speech?v=${twoDaysAgo()}`,
         data: new Uint8Array(audioBytes).buffer,
         headers: {
           Authorization: 'Bearer BJ6GUEOB2MPSPCR5FR3QM6JKIIVHILKC',
@@ -165,32 +174,32 @@ async function solve(page) {
         },
       });
 
-      console.log('Handling an empty response by reloading');
+      logger.info('Handling an empty response by reloading');
       if (undefined == response.data.text) {
         const reloadButton = await imageFrame.$('#recaptcha-reload-button');
         await reloadButton.click({ delay: rdn(30, 150) });
         continue;
       }
 
-      console.log('Extracting the text from response');
+      logger.info('Extracting the text from response');
       const audioTranscript = response.data.text.trim();
-      console.log('findind the response input field');
+      logger.info('findind the response input field');
       const input = await imageFrame.$('#audio-response');
 
-      console.log('Selecting the input field');
+      logger.info('Selecting the input field');
       await input.click({ delay: rdn(30, 150) });
 
-      console.log('Typing the response into the input field');
+      logger.info('Typing the response into the input field');
       await input.type(audioTranscript, { delay: rdn(30, 75) });
 
-      console.log('Finding the submit button');
+      logger.info('Finding the submit button');
       const verifyButton = await imageFrame.$('#recaptcha-verify-button');
 
-      console.log('Clicking the submit button');
+      logger.info('Clicking the submit button');
       await verifyButton.click({ delay: rdn(30, 150) });
 
       try {
-        console.log('Trying to confirm that it worked');
+        logger.info('Trying to confirm that it worked');
         await page.waitForFunction(
           () => {
             const iframe = document.querySelector('iframe[src*="api2/anchor"]');
@@ -207,13 +216,13 @@ async function solve(page) {
           () => document.getElementById('g-recaptcha-response').value,
         );
       } catch (e) {
-        console.log('multiple audio');
+        logger.error('multiple audio');
         continue;
       }
     }
   } catch (e) {
-    console.log(e);
-    return null;
+    logger.critical(e);
+    throw e;
   }
 }
 
