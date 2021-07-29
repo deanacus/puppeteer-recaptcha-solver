@@ -24,6 +24,7 @@ const config = {
       '--disable-features=IsolateOrigins',
       '--disable-site-isolation-trials',
     ],
+    timeout: 10000,
   },
 };
 
@@ -51,23 +52,17 @@ async function run() {
     log.info('Attempting to solve');
     await solver.solve(page);
     log.info('Successfully solved');
-    log.debug('Stopping screen recording');
-    await recorder.stop();
-    log.debug('Closing browser window');
-    await browser.close();
   } catch (error) {
-    log.critical(error);
+    log.critical('Something went wrong');
+  } finally {
     log.debug('Stopping screen recording');
     await recorder.stop();
     log.debug('Closing browser window');
     await browser.close();
+    process.exit(1);
   }
 }
 
 console.log('`ctrl + c` to exit');
-process.on('SIGINT', () => {
-  console.log('bye!');
-  process.exit();
-});
 
 run();
